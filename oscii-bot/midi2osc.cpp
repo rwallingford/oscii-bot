@@ -71,6 +71,11 @@ WDL_FastString g_ini_file;
 WDL_FastString g_default_script_path;
 WDL_PtrList<char> g_script_load_filenames, g_script_load_paths;
 
+//~~~~ UNBUNDLING BUILD
+int g_deviceIgnoresBundles	= 0;
+int g_max_msgs_before_delay	= 0;
+int g_max_msgs_sleep_delay	= 0;;
+
 class eel_string_context_state;
 class eel_lice_state;
 class eel_net_state;
@@ -941,6 +946,57 @@ public:
 
     SET_SOCK_BLOCK(m_sendsock, true);
 
+
+    //------------------------------------------
+    //~~~~ UNBUNDLING BUILD
+    //------------------------------------------
+    // WHEN USING BUNDLED MESSAGES - UNBUNDLE THEM
+    //------------------------------------------
+    if (g_deviceIgnoresBundles)
+    {
+      int	msgs_sent = 0;
+
+      packetstart += 	16;		// BYPASS THE OSCII-BOT QUEUE "BUNDLE PADDING"
+
+      while (m_sendq.Available() >= (int)sizeof(int))
+      {
+
+        int len=*(int*)m_sendq.Get(); // not advancing
+        OSC_MAKEINTMEM4BE((char*)&len);
+
+        if (len < 1 || len > MAX_OSC_MSG_LEN || len > m_sendq.Available()) break; 
+
+        // SKIP MESSAGE SIZE - POINT TO MESSAGE CONTENT
+        packetstart += sizeof(int);
+
+        sendto(m_sendsock, packetstart, len, 0, (struct sockaddr*)&m_sendaddr, sizeof(m_sendaddr));
+
+        packetstart += 	len;
+        m_sendq.Advance(len + sizeof(int));
+
+        if (!m_sendq.Available())	
+            break;	// NO MORE MESSAGES
+
+        // DO WE NEED a Sleep?
+        if (g_max_msgs_before_delay !=0)
+        {
+          if (++msgs_sent >= g_max_msgs_before_delay)
+          {
+            msgs_sent = 0;
+            Sleep(g_max_msgs_sleep_delay);
+          }
+        }
+      }
+
+      // DONE ALL MESSAGES
+      SET_SOCK_BLOCK(m_sendsock, false);
+      m_sendq.Clear();
+      return;
+    }
+
+    //------------------------------------------
+    // WHEN NOT USING BUNDLED MESSAGES
+    //------------------------------------------
     while (m_sendq.Available() >= (int)sizeof(int))
     {
       int len=*(int*)m_sendq.Get(); // not advancing
@@ -2123,6 +2179,10 @@ WDL_DLGRET mainProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
       g_last_wndpos.right = GetPrivateProfileInt("oscii-bot", "wnd_w",0,g_ini_file.Get());
       g_last_wndpos.bottom = GetPrivateProfileInt("oscii-bot", "wnd_h",0,g_ini_file.Get());
 
+      //~~~~ UNBUNDLING BUILD
+      g_deviceIgnoresBundles = GetPrivateProfileInt("osc_message_bundling", "deviceIgnoresBundles", 0, g_ini_file.Get());
+      g_max_msgs_before_delay = GetPrivateProfileInt("osc_message_bundling", "max_msgs_before_delay", 0, g_ini_file.Get());
+      g_max_msgs_sleep_delay = GetPrivateProfileInt("osc_message_bundling", "max_msgs_sleep_delay", 0, g_ini_file.Get());	
       {
 #ifdef _WIN32
         HFONT font = CreateFont(14, 0, 0, 0, FW_NORMAL, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH, "Courier New");
